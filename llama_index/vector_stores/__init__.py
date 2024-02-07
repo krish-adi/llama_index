@@ -1,6 +1,5 @@
 """Vector stores."""
 
-
 from llama_index.vector_stores.astra import AstraDBVectorStore
 from llama_index.vector_stores.awadb import AwaDBVectorStore
 from llama_index.vector_stores.azurecosmosmongo import AzureCosmosDBMongoDBVectorSearch
@@ -11,6 +10,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.vector_stores.cogsearch import CognitiveSearchVectorStore
 from llama_index.vector_stores.dashvector import DashVectorStore
 from llama_index.vector_stores.deeplake import DeepLakeVectorStore
+from llama_index.vector_stores.duckdb import DuckDBVectorStore
 from llama_index.vector_stores.docarray import (
     DocArrayHnswVectorStore,
     DocArrayInMemoryVectorStore,
@@ -74,6 +74,7 @@ __all__ = [
     "ChatGPTRetrievalPluginClient",
     "MilvusVectorStore",
     "DeepLakeVectorStore",
+    "DuckDBVectorStore",
     "MyScaleVectorStore",
     "LanceDBVectorStore",
     "TairVectorStore",
