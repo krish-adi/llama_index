@@ -308,7 +308,6 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         standard_filters: MetadataFilters,
     ) -> dict:
         """Translate standard metadata filters to DuckDB SQL specification."""
-        # "department = 'Marketing' AND salary > 50000 AND year_joined > 2015"
 
         filters_list = []
         # condition = standard_filters.condition or "and"  ## and/or as strings.
@@ -337,9 +336,13 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
         for _fc in filters_list:
             if isinstance(_fc[2], str):
-                _filters_condition_list.append(f"{_fc[0]} {_fc[1]} '{_fc[2]}'")
+                _filters_condition_list.append(
+                    f"json_extract_string(metadata_, '$.{_fc[0]}') {_fc[1]} '{_fc[2]}'"
+                )
             else:
-                _filters_condition_list.append(f"{_fc[0]} {_fc[1]} {_fc[2]}")
+                _filters_condition_list.append(
+                    f"json_extract(metadata_, '$.{_fc[0]}') {_fc[1]} {_fc[2]}"
+                )
 
         return f" {condition} ".join(_filters_condition_list)
 
@@ -363,12 +366,13 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
         if query.filters is not None:
             # TODO: results from the metadata filter query
+            _filter_string = self._build_metadata_filter_condition(query.filters)
             _ddb_query = f"""
             SELECT node_id, text, embedding, metadata_, score
             FROM (
                 SELECT *, list_cosine_similarity(embedding, {query.query_embedding}) AS score
                 FROM {self.table_name}
-                WHERE {self._build_metadata_filter_condition(query.filters)}
+                WHERE {_filter_string}
             ) sq            
             WHERE score IS NOT NULL
             ORDER BY score DESC LIMIT {query.similarity_top_k};
