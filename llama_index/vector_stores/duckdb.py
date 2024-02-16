@@ -69,9 +69,9 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
     database_name: Optional[str]
     table_name: Optional[str]
-    # schema_name: Optional[str] # TODO: support schema
+    # schema_name: Optional[str] # TODO: support schema name
     embed_dim: Optional[int]
-    hybrid_search: Optional[bool]
+    # hybrid_search: Optional[bool] # TODO: support hybrid search
     text_search_config: Optional[dict]
     persist_dir: Optional[str]
 
@@ -85,7 +85,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         table_name: Optional[str] = "documents",
         # schema_name: Optional[str] = "main",
         embed_dim: Optional[int] = 1536,
-        hybrid_search: Optional[bool] = True,
+        # hybrid_search: Optional[bool] = False,
         # https://duckdb.org/docs/extensions/full_text_search
         text_search_config: Optional[dict] = {
             "stemmer": "english",
@@ -129,7 +129,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             table_name=table_name,
             # schema_name=schema_name,
             embed_dim=embed_dim,
-            hybrid_search=hybrid_search,
+            # hybrid_search=hybrid_search,
             text_search_config=text_search_config,
             persist_dir=persist_dir,
         )
@@ -174,7 +174,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         table_name: Optional[str] = "documents",
         # schema_name: Optional[str] = "main",
         embed_dim: Optional[int] = 1536,
-        hybrid_search: Optional[bool] = True,
+        # hybrid_search: Optional[bool] = False,
         text_search_config: Optional[dict] = {
             "stemmer": "english",
             "stopwords": "english",
@@ -192,7 +192,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             table_name=table_name,
             # schema_name=schema_name,
             embed_dim=embed_dim,
-            hybrid_search=hybrid_search,
+            # hybrid_search=hybrid_search,
             text_search_config=text_search_config,
             persist_dir=persist_dir,
             **kwargs,
