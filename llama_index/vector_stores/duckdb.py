@@ -20,6 +20,40 @@ logger = logging.getLogger(__name__)
 import_err_msg = "`duckdb` package not found, please run `pip install duckdb`"
 
 
+class DuckDBLocalContext:
+    def __init__(self, database_path: str):
+        self.database_path = database_path
+        self._conn = None
+
+    def __enter__(self):
+        try:
+            import duckdb
+        except ImportError:
+            raise ImportError(import_err_msg)
+
+        if not os.path.exists(os.path.dirname(self.database_path)):
+            raise ValueError(
+                f"Directory {os.path.dirname(self.database_path)} does not exist."
+            )
+
+        # if not os.path.isfile(self.database_path):
+        #     raise ValueError(f"Database path {self.database_path} is not a valid file.")
+
+        self._conn = duckdb.connect(self.database_path)
+        self._conn.install_extension("json")
+        self._conn.load_extension("json")
+        self._conn.install_extension("fts")
+        self._conn.load_extension("fts")
+
+        return self._conn
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._conn.close()
+
+        if self._conn:
+            self._conn.close()
+
+
 class DuckDBVectorStore(BasePydanticVectorStore):
     """DuckDB vector store.
 
@@ -43,6 +77,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
     _conn: Any = PrivateAttr()
     _is_initialized: bool = PrivateAttr(default=False)
+    _database_path: Optional[str] = PrivateAttr()
 
     def __init__(
         self,
@@ -82,11 +117,10 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             if not os.path.exists(persist_dir):
                 os.makedirs(persist_dir)
 
-            with duckdb.connect(os.path.join(persist_dir, database_name)) as _conn:
-                _conn.install_extension("json")
-                _conn.load_extension("json")
-                _conn.install_extension("fts")
-                _conn.load_extension("fts")
+            self._database_path = os.path.join(persist_dir, database_name)
+
+            with DuckDBLocalContext(self._database_path) as _conn:
+                pass
 
             self._conn = None
 
@@ -104,28 +138,9 @@ class DuckDBVectorStore(BasePydanticVectorStore):
     def from_local(
         cls, database_path: str, table_name: str = "documents"
     ) -> "DuckDBVectorStore":
-        try:
-            import duckdb
-        except ImportError:
-            raise ImportError(import_err_msg)
+        """Load a DuckDB vector store from a local file."""
 
-        # TODO: load a local database based on it's path and persist dir.
-        # extract persist directory from database str
-        # extract name of the database from the database str
-
-        # check if database_path exists and is a path
-        if not os.path.exists(database_path):
-            raise ValueError(f"Database path {database_path} does not exist.")
-
-        if not os.path.isfile(database_path):
-            raise ValueError(f"Database path {database_path} is not a valid file.")
-
-        # check if table_name exists in the database
-        with duckdb.connect(database_path) as _conn:
-            _conn.install_extension("json")
-            _conn.load_extension("json")
-            _conn.install_extension("fts")
-            _conn.load_extension("fts")
+        with DuckDBLocalContext(database_path) as _conn:
             try:
                 _table_info = _conn.execute(f"SHOW {table_name};").fetchall()
             except Exception as e:
@@ -171,10 +186,6 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         persist_dir: Optional[str] = "./storage",
         **kwargs: Any,
     ) -> "DuckDBVectorStore":
-        try:
-            import duckdb
-        except ImportError:
-            raise ImportError(import_err_msg)
 
         return cls(
             database_name=database_name,
@@ -197,10 +208,6 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         return self._conn
 
     def _initialize(self) -> None:
-        try:
-            import duckdb
-        except ImportError:
-            raise ImportError(import_err_msg)
 
         if not self._is_initialized:
             # TODO: schema.table also.
@@ -218,13 +225,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
                     """
                 )
             else:
-                with duckdb.connect(
-                    os.path.join(self.persist_dir, self.database_name)
-                ) as _conn:
-                    _conn.install_extension("json")
-                    _conn.load_extension("json")
-                    _conn.install_extension("fts")
-                    _conn.load_extension("fts")
+                with DuckDBLocalContext(self._database_path) as _conn:
                     _conn.execute(
                         f"""
                         CREATE TABLE {self.table_name} (
@@ -273,13 +274,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
                 _row = self._node_to_table_row(node)
                 _table.insert(_row)
         else:
-            with duckdb.connect(
-                os.path.join(self.persist_dir, self.database_name)
-            ) as _conn:
-                _conn.install_extension("json")
-                _conn.load_extension("json")
-                _conn.install_extension("fts")
-                _conn.load_extension("fts")
+            with DuckDBLocalContext(self._database_path) as _conn:
                 _table = _conn.table(self.table_name)
                 for node in nodes:
                     ids.append(node.node_id)
@@ -296,10 +291,6 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             ref_doc_id (str): The doc_id of the document to delete.
 
         """
-        try:
-            import duckdb
-        except ImportError:
-            raise ImportError(import_err_msg)
 
         _ddb_query = f"""
             DELETE FROM {self.table_name}
@@ -308,9 +299,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         if self.database_name == ":memory:":
             self._conn.execute(_ddb_query)
         else:
-            with duckdb.connect(
-                os.path.join(self.persist_dir, self.database_name)
-            ) as _conn:
+            with DuckDBLocalContext(self._database_path) as _conn:
                 _conn.execute(_ddb_query)
 
     @staticmethod
@@ -365,11 +354,6 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
         """
 
-        try:
-            import duckdb
-        except ImportError:
-            raise ImportError(import_err_msg)
-
         nodes = []
         similarities = []
         ids = []
@@ -401,13 +385,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         if self.database_name == ":memory:":
             _final_results = self._conn.execute(_ddb_query).fetchall()
         else:
-            with duckdb.connect(
-                os.path.join(self.persist_dir, self.database_name)
-            ) as _conn:
-                _conn.install_extension("json")
-                _conn.load_extension("json")
-                _conn.install_extension("fts")
-                _conn.load_extension("fts")
+            with DuckDBLocalContext(self._database_path) as _conn:
                 _final_results = _conn.execute(_ddb_query).fetchall()
 
         for _row in _final_results:
