@@ -296,12 +296,22 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             ref_doc_id (str): The doc_id of the document to delete.
 
         """
-        self._conn.execute(
-            f"""
+        try:
+            import duckdb
+        except ImportError:
+            raise ImportError(import_err_msg)
+
+        _ddb_query = f"""
             DELETE FROM {self.table_name}
-            WHERE metadata_->>'ref_doc_id' = '{ref_doc_id}';
+            WHERE json_extract_string(metadata_, '$.ref_doc_id') = '{ref_doc_id}';
             """
-        )
+        if self.database_name == ":memory:":
+            self._conn.execute(_ddb_query)
+        else:
+            with duckdb.connect(
+                os.path.join(self.persist_dir, self.database_name)
+            ) as _conn:
+                _conn.execute(_ddb_query)
 
     @staticmethod
     def _build_metadata_filter_condition(
