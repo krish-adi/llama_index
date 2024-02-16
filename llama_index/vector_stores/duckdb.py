@@ -14,11 +14,7 @@ from llama_index.vector_stores.types import (
     VectorStoreQuery,
     VectorStoreQueryResult,
 )
-from llama_index.vector_stores.utils import (
-    legacy_metadata_dict_to_node,
-    metadata_dict_to_node,
-    node_to_metadata_dict,
-)
+from llama_index.vector_stores.utils import node_to_metadata_dict
 
 logger = logging.getLogger(__name__)
 import_err_msg = "`duckdb` package not found, please run `pip install duckdb`"
@@ -149,6 +145,8 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         return self._conn
 
     def _initialize(self) -> None:
+        # Check if the tables are present and also the schema
+        # even if you are not adding rows, check for query and initialize it.
         if not self._conn:
             raise ValueError("DuckDB connection not initialized!")
         if not self._is_initialized:
@@ -166,6 +164,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             )
             self._is_initialized = True
 
+    @staticmethod
     def _node_to_table_row(self, node: BaseNode) -> Any:
         return (
             node.node_id,
@@ -185,6 +184,8 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             nodes: List[BaseNode]: list of nodes with embeddings
 
         """
+
+        print("adding docs.")
 
         self._initialize()
 
@@ -212,6 +213,46 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             """
         )
 
+    @staticmethod
+    def _build_metadata_filter_condition(
+        standard_filters: MetadataFilters,
+    ) -> dict:
+        """Translate standard metadata filters to DuckDB SQL specification."""
+        # "department = 'Marketing' AND salary > 50000 AND year_joined > 2015"
+
+        filters_list = []
+        # condition = standard_filters.condition or "and"  ## and/or as strings.
+        condition = "AND"
+        _filters_condition_list = []
+
+        for filter in standard_filters.filters:
+            if filter.operator:
+                if filter.operator in [
+                    "<",
+                    ">",
+                    "<=",
+                    ">=",
+                    "<>",
+                    "!=",
+                ]:
+                    filters_list.append((filter.key, filter.operator, filter.value))
+                elif filter.operator in ["=="]:
+                    filters_list.append((filter.key, "=", filter.value))
+                else:
+                    raise ValueError(
+                        f"Filter operator {filter.operator} not supported."
+                    )
+            else:
+                filters_list.append((filter.key, "=", filter.value))
+
+        for _fc in filters_list:
+            if isinstance(_fc[2], str):
+                _filters_condition_list.append(f"{_fc[0]} {_fc[1]} '{_fc[2]}'")
+            else:
+                _filters_condition_list.append(f"{_fc[0]} {_fc[1]} {_fc[2]}")
+
+        return f" {condition} ".join(_filters_condition_list)
+
     def query(self, query: VectorStoreQuery, **kwargs: Any) -> VectorStoreQueryResult:
         """Query index for top k most similar nodes.
 
@@ -220,23 +261,28 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             similarity_top_k (int): top k most similar nodes
 
         """
-        # query.query_embedding,
-        # query.similarity_top_k,
-        # query.filters,
-        if query.filters is not None:
-            # Implement metadata filter queries
-            pass
-        else:
-            where = kwargs.pop("where", {})
-
-        # TODO: results from the metadata filter query
-        # filtered_set = []
-
         nodes = []
         similarities = []
         ids = []
-        _final_results = self._conn.execute(
-            f"""
+
+        if query.filters is not None:
+            # TODO: results from the metadata filter query
+            _final_results = self._conn.execute(
+                f"""
+            SELECT node_id, text, embedding, metadata_, score
+            FROM (
+                SELECT *, list_cosine_similarity(embedding, {query.query_embedding}) AS score
+                FROM {self.table_name}
+                WHERE {self._build_metadata_filter_condition(query.filters)}
+            ) sq            
+            WHERE score IS NOT NULL
+            ORDER BY score DESC LIMIT {query.similarity_top_k};
+            """
+            ).fetchall()
+
+        else:
+            _final_results = self._conn.execute(
+                f"""
             SELECT node_id, text, embedding, metadata_, score
             FROM (
                 SELECT *, list_cosine_similarity(embedding, {query.query_embedding}) AS score
@@ -245,7 +291,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             WHERE score IS NOT NULL
             ORDER BY score DESC LIMIT {query.similarity_top_k};
             """
-        ).fetchall()
+            ).fetchall()
 
         for _row in _final_results:
             node = TextNode(
