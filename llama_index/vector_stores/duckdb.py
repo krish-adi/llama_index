@@ -4,7 +4,7 @@ import logging
 import math
 import json
 from typing import Any, Dict, Generator, List, Optional, cast
-
+import os
 from llama_index.bridge.pydantic import Field, PrivateAttr
 from llama_index.schema import BaseNode, MetadataMode, TextNode
 from llama_index.utils import truncate_text
@@ -35,7 +35,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
     database_name: Optional[str]
     table_name: Optional[str]
-    schema_name: Optional[str]
+    # schema_name: Optional[str] # TODO: support schema
     embed_dim: Optional[int]
     hybrid_search: Optional[bool]
     text_search_config: Optional[dict]
@@ -48,7 +48,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         self,
         database_name: Optional[str] = ":memory:",
         table_name: Optional[str] = "documents",
-        schema_name: Optional[str] = "main",
+        # schema_name: Optional[str] = "main",
         embed_dim: Optional[int] = 1536,
         hybrid_search: Optional[bool] = True,
         # https://duckdb.org/docs/extensions/full_text_search
@@ -69,18 +69,31 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         except ImportError:
             raise ImportError(import_err_msg)
 
-        self._conn = duckdb.connect(database_name)
-        self._conn.install_extension("json")
-        self._conn.load_extension("json")
-        self._conn.install_extension("fts")
-        self._conn.load_extension("fts")
-
         self._is_initialized = False
+
+        if database_name == ":memory:":
+            self._conn = duckdb.connect(database_name)
+            self._conn.install_extension("json")
+            self._conn.load_extension("json")
+            self._conn.install_extension("fts")
+            self._conn.load_extension("fts")
+        else:
+            # check if persist dir exists
+            if not os.path.exists(persist_dir):
+                os.makedirs(persist_dir)
+
+            with duckdb.connect(os.path.join(persist_dir, database_name)) as _conn:
+                _conn.install_extension("json")
+                _conn.load_extension("json")
+                _conn.install_extension("fts")
+                _conn.load_extension("fts")
+
+            self._conn = None
 
         super().__init__(
             database_name=database_name,
             table_name=table_name,
-            schema_name=schema_name,
+            # schema_name=schema_name,
             embed_dim=embed_dim,
             hybrid_search=hybrid_search,
             text_search_config=text_search_config,
@@ -88,7 +101,9 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         )
 
     @classmethod
-    def from_local(cls, database: str) -> "DuckDBVectorStore":
+    def from_local(
+        cls, database_path: str, table_name: str = "documents"
+    ) -> "DuckDBVectorStore":
         try:
             import duckdb
         except ImportError:
@@ -98,14 +113,51 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         # extract persist directory from database str
         # extract name of the database from the database str
 
-        return cls(database_name=database)
+        # check if database_path exists and is a path
+        if not os.path.exists(database_path):
+            raise ValueError(f"Database path {database_path} does not exist.")
+
+        if not os.path.isfile(database_path):
+            raise ValueError(f"Database path {database_path} is not a valid file.")
+
+        # check if table_name exists in the database
+        with duckdb.connect(database_path) as _conn:
+            _conn.install_extension("json")
+            _conn.load_extension("json")
+            _conn.install_extension("fts")
+            _conn.load_extension("fts")
+            try:
+                _table_info = _conn.execute(f"SHOW {table_name};").fetchall()
+            except Exception as e:
+                raise ValueError(f"Index table {table_name} not found in the database.")
+
+            _std = {
+                "text": "VARCHAR",
+                "node_id": "VARCHAR",
+                "embedding": "FLOAT[]",
+                "metadata_": "JSON",
+            }
+            _ti = {_i[0]: _i[1] for _i in _table_info}
+            if _std != _ti:
+                raise ValueError(
+                    f"Index table {table_name} does not have the correct schema."
+                )
+
+        _cls = cls(
+            database_name=os.path.basename(database_path),
+            table_name=table_name,
+            persist_dir=os.path.dirname(database_path),
+        )
+        _cls._is_initialized = True
+
+        return _cls
 
     @classmethod
     def from_params(
         cls,
         database_name: Optional[str] = ":memory:",
         table_name: Optional[str] = "documents",
-        schema_name: Optional[str] = "main",
+        # schema_name: Optional[str] = "main",
         embed_dim: Optional[int] = 1536,
         hybrid_search: Optional[bool] = True,
         text_search_config: Optional[dict] = {
@@ -127,7 +179,7 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         return cls(
             database_name=database_name,
             table_name=table_name,
-            schema_name=schema_name,
+            # schema_name=schema_name,
             embed_dim=embed_dim,
             hybrid_search=hybrid_search,
             text_search_config=text_search_config,
@@ -145,26 +197,46 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         return self._conn
 
     def _initialize(self) -> None:
-        # Check if the tables are present and also the schema
-        # even if you are not adding rows, check for query and initialize it.
-        if not self._conn:
-            raise ValueError("DuckDB connection not initialized!")
+        try:
+            import duckdb
+        except ImportError:
+            raise ImportError(import_err_msg)
+
         if not self._is_initialized:
-            # TODO: check if the table, schema exists
-            # if not, create the table, schema
-            self._conn.execute(
-                f"""
-                CREATE TABLE {self.table_name} (
-                    node_id VARCHAR,
-                    text TEXT,
-                    embedding FLOAT[{self.embed_dim}],
-                    metadata_ JSON
-                    );
-                """
-            )
+            # TODO: schema.table also.
+            # Check if table and type is present
+            # if not, create table
+            if self.database_name == ":memory:":
+                self._conn.execute(
+                    f"""
+                    CREATE TABLE {self.table_name} (
+                        node_id VARCHAR,
+                        text TEXT,
+                        embedding FLOAT[{self.embed_dim}],
+                        metadata_ JSON
+                        );
+                    """
+                )
+            else:
+                with duckdb.connect(
+                    os.path.join(self.persist_dir, self.database_name)
+                ) as _conn:
+                    _conn.install_extension("json")
+                    _conn.load_extension("json")
+                    _conn.install_extension("fts")
+                    _conn.load_extension("fts")
+                    _conn.execute(
+                        f"""
+                        CREATE TABLE {self.table_name} (
+                            node_id VARCHAR,
+                            text TEXT,
+                            embedding FLOAT[{self.embed_dim}],
+                            metadata_ JSON
+                            );
+                        """
+                    )
             self._is_initialized = True
 
-    @staticmethod
     def _node_to_table_row(self, node: BaseNode) -> Any:
         return (
             node.node_id,
@@ -185,16 +257,34 @@ class DuckDBVectorStore(BasePydanticVectorStore):
 
         """
 
-        print("adding docs.")
+        try:
+            import duckdb
+        except ImportError:
+            raise ImportError(import_err_msg)
 
         self._initialize()
 
         ids = []
-        _table = self._conn.table(self.table_name)
-        for node in nodes:
-            ids.append(node.node_id)
-            _row = self._node_to_table_row(node)
-            _table.insert(_row)
+
+        if self.database_name == ":memory:":
+            _table = self._conn.table(self.table_name)
+            for node in nodes:
+                ids.append(node.node_id)
+                _row = self._node_to_table_row(node)
+                _table.insert(_row)
+        else:
+            with duckdb.connect(
+                os.path.join(self.persist_dir, self.database_name)
+            ) as _conn:
+                _conn.install_extension("json")
+                _conn.load_extension("json")
+                _conn.install_extension("fts")
+                _conn.load_extension("fts")
+                _table = _conn.table(self.table_name)
+                for node in nodes:
+                    ids.append(node.node_id)
+                    _row = self._node_to_table_row(node)
+                    _table.insert(_row)
 
         return ids
 
@@ -257,18 +347,23 @@ class DuckDBVectorStore(BasePydanticVectorStore):
         """Query index for top k most similar nodes.
 
         Args:
-            query_embedding (List[float]): query embedding
-            similarity_top_k (int): top k most similar nodes
+            query.query_embedding (List[float]): query embedding
+            query.similarity_top_k (int): top k most similar nodes
 
         """
+
+        try:
+            import duckdb
+        except ImportError:
+            raise ImportError(import_err_msg)
+
         nodes = []
         similarities = []
         ids = []
 
         if query.filters is not None:
             # TODO: results from the metadata filter query
-            _final_results = self._conn.execute(
-                f"""
+            _ddb_query = f"""
             SELECT node_id, text, embedding, metadata_, score
             FROM (
                 SELECT *, list_cosine_similarity(embedding, {query.query_embedding}) AS score
@@ -278,11 +373,8 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             WHERE score IS NOT NULL
             ORDER BY score DESC LIMIT {query.similarity_top_k};
             """
-            ).fetchall()
-
         else:
-            _final_results = self._conn.execute(
-                f"""
+            _ddb_query = f"""
             SELECT node_id, text, embedding, metadata_, score
             FROM (
                 SELECT *, list_cosine_similarity(embedding, {query.query_embedding}) AS score
@@ -291,7 +383,18 @@ class DuckDBVectorStore(BasePydanticVectorStore):
             WHERE score IS NOT NULL
             ORDER BY score DESC LIMIT {query.similarity_top_k};
             """
-            ).fetchall()
+
+        if self.database_name == ":memory:":
+            _final_results = self._conn.execute(_ddb_query).fetchall()
+        else:
+            with duckdb.connect(
+                os.path.join(self.persist_dir, self.database_name)
+            ) as _conn:
+                _conn.install_extension("json")
+                _conn.load_extension("json")
+                _conn.install_extension("fts")
+                _conn.load_extension("fts")
+                _final_results = _conn.execute(_ddb_query).fetchall()
 
         for _row in _final_results:
             node = TextNode(
